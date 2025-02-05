@@ -11,6 +11,7 @@ import sys
 import tempfile
 import pickle
 import base64
+import time
 
 import gin
 from lru import LRU
@@ -182,18 +183,25 @@ async def tryitnow(request: web.Request):
 
 @routes.post("/query/{org}/{agent}")
 async def query(request: web.Request):
+    start_time = time.time()
     agent_path = get_agent_path(request)
 
     with open(os.path.join(agent_path, "headers.pickle"), "rb") as f:
         headers = pickle.load(f)
 
     knowledge_key = headers.get("Knowledge-Key")
-    knowledge_url = headers.get("Knowledge-URL")
-    knowledge_model = headers.get("Knowledge-Model")
+    knowledge_url = headers.get("Knowledge-Url")
+    knowledge_model = headers.get("Knowledge-Model").lower()
     knowledge_model_name = headers.get("Knowledge-Model-Name")
     knowledge_mode_prompt = headers.get("Knowledge-Model-Prompt")
 
+    logging.info("headers")
+    logging.info(headers)
+
+    if knowledge_model == "": knowledge_model = "openai"
+
     if knowledge_model_name is None:
+        logging.info("could not find the model name")
         return web.json_response({"errMsg": "model name found"})
 
     knowledge_model_name = f"{knowledge_model}/{knowledge_model_name}"
@@ -208,6 +216,7 @@ async def query(request: web.Request):
         return web.json_response({"errMsg": "index not found"})
 
     req = await request.json()
+    logging.info("request")
     logging.info(req)
 
     turns = req.get("turns", [])
@@ -220,18 +229,18 @@ async def query(request: web.Request):
         prompt = knowledge_mode_prompt
 
     if not isinstance(turns, list):
+        logging.error("turns is not a list")
         return web.json_response({"errMsg": "turns type is not list"})
 
     if len(turns) == 0:
+        logging.error("empty turns")
         feedback = req.get("feedback", None)
         if feedback:
             return web.json_response({"reply": ""})
         return web.json_response({"errMsg": "turns length cannot be empty"})
 
-    if turns[0].get("role", "") != "user":
-        return web.json_response({"errMsg": "first turn is not from user"})
-
     if turns[-1].get("role", "") != "user":
+        logging.info("last turn is not from user")
         return web.json_response({"errMsg": "last turn is not from user"})
 
     user_input = turns[-1].get("content", "")
@@ -245,7 +254,9 @@ async def query(request: web.Request):
     new_prompt = template({"query": user_input, "context": context})
     logging.info("new_prompt")
     logging.info(new_prompt)
-
+    logging.info(f"knowledge_model:{knowledge_model}")
+    logging.info(f"model_name: {knowledge_model_name}")
+    logging.info(f"llm_url: {knowledge_url}")
     match knowledge_model:
         case "openai":
             llm = get_generator(  # type: ignore
@@ -262,6 +273,9 @@ async def query(request: web.Request):
     resp = await llm.agenerate(new_prompt, turns)
     logging.info("resp")
     logging.info(resp)
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    logging.info(f"Elapsed time: {elapsed_time}")
     return web.json_response(dataclasses.asdict(resp))
 
 
